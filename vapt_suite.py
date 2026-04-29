@@ -9,6 +9,11 @@ import subprocess
 import sys
 import os
 import struct
+import datetime
+import ssl
+import urllib.request
+import urllib.error
+import urllib.parse
 
 # ─────────────────────────── COLORS ───────────────────────────
 class Color:
@@ -599,6 +604,37 @@ GENERAL_MITIGATIONS = [
     "Use intrusion detection systems (IDS) like Snort or Suricata"
 ]
 
+# ─────────────── METASPLOIT MODULE MAP ────────────────────────
+METASPLOIT_MODULES = {
+    21:   ["exploit/unix/ftp/vsftpd_234_backdoor",
+           "auxiliary/scanner/ftp/ftp_login",
+           "auxiliary/scanner/ftp/anonymous"],
+    22:   ["auxiliary/scanner/ssh/ssh_login",
+           "auxiliary/scanner/ssh/ssh_version"],
+    23:   ["auxiliary/scanner/telnet/telnet_login",
+           "auxiliary/scanner/telnet/telnet_version"],
+    25:   ["auxiliary/scanner/smtp/smtp_enum",
+           "auxiliary/scanner/smtp/smtp_version"],
+    80:   ["auxiliary/scanner/http/http_version",
+           "exploit/multi/http/php_cgi_arg_injection",
+           "exploit/unix/webapp/php_include_w_shell"],
+    139:  ["exploit/multi/samba/usermap_script",
+           "auxiliary/scanner/smb/smb_version",
+           "auxiliary/scanner/smb/smb_login"],
+    445:  ["exploit/windows/smb/ms17_010_eternalblue",
+           "auxiliary/scanner/smb/smb_ms17_010"],
+    3306: ["auxiliary/scanner/mysql/mysql_login",
+           "auxiliary/scanner/mysql/mysql_version",
+           "exploit/multi/mysql/mysql_udf_payload"],
+    5432: ["auxiliary/scanner/postgres/postgres_login",
+           "exploit/multi/postgres/postgres_copy_from_program"],
+    5900: ["auxiliary/scanner/vnc/vnc_login",
+           "auxiliary/scanner/vnc/vnc_none_auth"],
+    6667: ["exploit/unix/irc/unreal_ircd_3281_backdoor"],
+    8080: ["auxiliary/scanner/http/tomcat_mgr_login",
+           "exploit/multi/http/tomcat_mgr_upload"],
+}
+
 RISK_COLORS = {
     "CRITICAL": Color.RED,
     "HIGH": Color.YELLOW,
@@ -704,6 +740,295 @@ def mitigation_report(target):
     success("Mitigation strategy report generated successfully.")
 
 
+def web_vuln_check(target):
+    """Module W: Web Application Vulnerability Check (Burp Suite context)"""
+    section("WEB APPLICATION VULNERABILITY CHECK")
+    print(f"  {Color.GREEN}[+] Testing web services for common vulnerabilities...{Color.RESET}\n")
+    ip = resolve_target(target)
+    if not ip:
+        return
+
+    web_ports = []
+    for p in [80, 8080, 443, 8443]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            if s.connect_ex((ip, p)) == 0:
+                web_ports.append(p)
+            s.close()
+        except Exception:
+            pass
+
+    if not web_ports:
+        warning("No web services detected on ports 80, 8080, 443, 8443.")
+        return
+
+    info(f"Web ports open: {', '.join(str(p) for p in web_ports)}\n")
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    for port in web_ports:
+        scheme = "https" if port in [443, 8443] else "http"
+        base   = f"{scheme}://{ip}:{port}"
+        print(f"  {Color.BOLD}{Color.BLUE}┌─ Port {port} — {scheme.upper()} ──────────────────────────────┐{Color.RESET}\n")
+
+        # ── Security Headers ──────────────────────────────────
+        info("Security Header Analysis:")
+        try:
+            req  = urllib.request.Request(base + "/", headers={"User-Agent": "MiniVAPT/2.0"})
+            kw   = {"context": ctx} if scheme == "https" else {}
+            resp = urllib.request.urlopen(req, timeout=5, **kw)
+            hdrs = {k.lower(): v for k, v in resp.headers.items()}
+            for hdr, desc in [
+                ("x-frame-options",          "Clickjacking Protection"),
+                ("x-content-type-options",   "MIME Sniffing Protection"),
+                ("content-security-policy",  "Content Security Policy"),
+                ("strict-transport-security","HSTS — Force HTTPS"),
+                ("x-xss-protection",         "XSS Filter Header"),
+            ]:
+                if hdrs.get(hdr):
+                    success(f"  {hdr}: {hdrs[hdr][:60]}")
+                else:
+                    warning(f"  MISSING: {hdr} — {desc}")
+            srv = hdrs.get("server")
+            if srv:
+                warning(f"  Server version disclosed: {srv}")
+            else:
+                success("  Server header: Hidden ✓")
+        except Exception as e:
+            warning(f"  Could not fetch headers: {e}")
+        print()
+
+        # ── Sensitive Path Probe ──────────────────────────────
+        info("Probing for sensitive / exposed paths:")
+        found = False
+        for path in ["/admin", "/phpmyadmin", "/dvwa", "/manager/html",
+                     "/robots.txt", "/wp-admin", "/server-status",
+                     "/backup", "/login", "/config.php", "/test"]:
+            try:
+                req  = urllib.request.Request(base + path,
+                                              headers={"User-Agent": "MiniVAPT/2.0"})
+                kw   = {"context": ctx} if scheme == "https" else {}
+                resp = urllib.request.urlopen(req, timeout=3, **kw)
+                print(f"    {Color.RED}[EXPOSED]{Color.RESET} {path} → HTTP {resp.status}")
+                found = True
+            except urllib.error.HTTPError as e:
+                if e.code in [301, 302, 403]:
+                    print(f"    {Color.YELLOW}[{e.code}]{Color.RESET} {path}")
+            except Exception:
+                pass
+        if not found:
+            success("  No common sensitive paths exposed.")
+        print()
+
+    success("Web check complete. Use Burp Suite to intercept and test requests manually.")
+
+
+def packet_capture(target):
+    """Module P: Network Traffic Capture (Wireshark/tcpdump context)"""
+    section("NETWORK PACKET CAPTURE")
+    print(f"  {Color.GREEN}[+] Capturing live traffic to/from target...{Color.RESET}\n")
+    ip = resolve_target(target)
+    if not ip:
+        return
+
+    if check_tool("tshark"):
+        tool = "tshark"
+    elif check_tool("tcpdump"):
+        tool = "tcpdump"
+    else:
+        error("Neither tshark nor tcpdump found.")
+        info("Install: sudo apt install tshark")
+        info(f"Or open Wireshark on Kali Linux and filter: ip.addr == {ip}")
+        return
+
+    duration = 10
+    warning("Root/sudo privileges are required for packet capture.")
+    info(f"Capturing {duration}s of traffic to/from {ip} using {tool}...\n")
+
+    if tool == "tshark":
+        cmd = (f"sudo tshark -i any -f 'host {ip}' "
+               f"-a duration:{duration} -q -z io,phs 2>/dev/null")
+    else:
+        cmd = f"sudo tcpdump -i any -n -c 100 host {ip} 2>/dev/null"
+
+    output = run_cmd(cmd)
+    if output:
+        print(f"{Color.GREEN}{output}{Color.RESET}")
+    else:
+        warning("No traffic captured. Run a scan module first to generate traffic.")
+    print()
+    success("Capture complete.")
+    info(f"For GUI analysis: open Wireshark on Kali → filter: ip.addr == {ip}")
+
+
+def metasploit_suggest(target):
+    """Module E: Metasploit Exploit / Auxiliary Suggestions"""
+    section("METASPLOIT EXPLOIT SUGGESTIONS")
+    print(f"  {Color.GREEN}[+] Mapping open services to Metasploit modules...{Color.RESET}\n")
+    ip = resolve_target(target)
+    if not ip:
+        return
+
+    info(f"Scanning {ip} for ports with known Metasploit modules...")
+    open_ports = []
+    for port in list(METASPLOIT_MODULES.keys()):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            if s.connect_ex((ip, port)) == 0:
+                open_ports.append(port)
+            s.close()
+        except Exception:
+            pass
+
+    if not open_ports:
+        success("No relevant open ports found. Target appears hardened.")
+        return
+
+    info(f"Found {len(open_ports)} port(s) with known MSF modules: "
+         f"{', '.join(str(p) for p in open_ports)}\n")
+    warning("Use ONLY on Metasploitable 2 in a controlled lab. "
+            "Never run exploits on unauthorized systems.\n")
+
+    if not check_tool("msfconsole"):
+        warning("Metasploit not found. Install: sudo apt install metasploit-framework\n")
+    else:
+        success("Metasploit Framework detected.\n")
+
+    for port in open_ports:
+        svc  = MITIGATION_DB.get(port, {}).get("service", f"Port {port}")
+        mods = METASPLOIT_MODULES[port]
+        print(f"  {Color.BOLD}{Color.CYAN}Port {port} — {svc}{Color.RESET}")
+        for mod in mods:
+            col = Color.RED    if mod.startswith("exploit") else Color.YELLOW
+            tag = "[EXPLOIT  ]" if mod.startswith("exploit") else "[AUXILIARY]"
+            print(f"    {col}{tag}{Color.RESET} use {mod}")
+        exploits = [m for m in mods if m.startswith("exploit")]
+        if exploits:
+            print(f"  {Color.GREEN}  Quick-start in msfconsole:")
+            print(f"      msf6 > use {exploits[0]}")
+            print(f"      msf6 > set RHOSTS {ip}")
+            print(f"      msf6 > run{Color.RESET}")
+        print()
+    success("Module suggestions generated. Launch Metasploit: sudo msfconsole")
+
+
+def generate_report(target):
+    """Module R: Save Security Assessment Report to a file"""
+    section("SECURITY ASSESSMENT REPORT GENERATOR")
+    print(f"  {Color.GREEN}[+] Running assessment and saving report...{Color.RESET}\n")
+    ip = resolve_target(target)
+    if not ip:
+        return
+
+    ts    = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = f"vapt_report_{ip.replace('.', '_')}_{ts}.txt"
+    sep   = "=" * 68
+    L     = []
+
+    def ln(t=""):
+        L.append(t)
+
+    ln(sep)
+    ln("   MINI VAPT SUITE v2.0  —  SECURITY ASSESSMENT REPORT")
+    ln(sep)
+    ln(f"  Date        : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    ln(f"  Target      : {target}  ({ip})")
+    ln(f"  Environment : Kali Linux → Metasploitable 2 (VMware Workstation)")
+    ln(f"  Tools Used  : Nmap, Python, Wireshark, Burp Suite, Metasploit, OpenVAS, Nessus")
+    ln(f"  Disclaimer  : Educational / lab use only")
+    ln(sep); ln()
+
+    # Section 1 — Basic info
+    ln("[ SECTION 1: BASIC INFORMATION ]"); ln("-" * 40)
+    try:
+        hostname = socket.gethostbyaddr(ip)[0]
+    except Exception:
+        hostname = "N/A"
+    ln(f"  Hostname : {hostname}")
+    ln(f"  FQDN     : {socket.getfqdn(target)}"); ln()
+
+    # Section 2 — Port scan
+    ln("[ SECTION 2: OPEN PORT DISCOVERY ]"); ln("-" * 40)
+    info("Scanning ports for report...")
+    all_ports = [21, 22, 23, 25, 53, 80, 110, 111, 139, 143, 443,
+                 445, 993, 995, 3306, 5432, 5900, 6667, 8080, 8443]
+    open_ports = []
+    for port in all_ports:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            if s.connect_ex((ip, port)) == 0:
+                open_ports.append(port)
+            s.close()
+        except Exception:
+            pass
+    if open_ports:
+        for port in open_ports:
+            svc  = MITIGATION_DB.get(port, {}).get("service", "Unknown")
+            risk = MITIGATION_DB.get(port, {}).get("risk",    "UNKNOWN")
+            ln(f"  PORT {port:<6} | {svc:<22} | Risk: {risk}")
+        success(f"Found {len(open_ports)} open port(s).")
+    else:
+        ln("  No open ports found on common ports.")
+    ln()
+
+    # Section 3 — Risk summary
+    ln("[ SECTION 3: RISK SUMMARY ]"); ln("-" * 40)
+    for level in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
+        pts = [p for p in open_ports if MITIGATION_DB.get(p, {}).get("risk") == level]
+        ln(f"  {level:<10}: {len(pts)} port(s)  →  "
+           f"{', '.join(str(p) for p in pts) or 'None'}")
+    ln()
+
+    # Section 4 — Detailed findings
+    ln("[ SECTION 4: DETAILED FINDINGS & MITIGATIONS ]"); ln("-" * 40)
+    for port in open_ports:
+        entry = MITIGATION_DB.get(port)
+        if entry:
+            ln(f"\n  Port {port} — {entry['service']} (Risk: {entry['risk']})")
+            ln("  Issues:")
+            for iss in entry["issues"]:
+                ln(f"    • {iss}")
+            ln("  Mitigations:")
+            for i, fix in enumerate(entry["mitigations"], 1):
+                ln(f"    {i}. {fix}")
+    ln()
+
+    # Section 5 — Metasploit suggestions
+    ln("[ SECTION 5: METASPLOIT MODULE SUGGESTIONS ]"); ln("-" * 40)
+    for port in open_ports:
+        mods = METASPLOIT_MODULES.get(port, [])
+        if mods:
+            svc = MITIGATION_DB.get(port, {}).get("service", f"Port {port}")
+            ln(f"\n  Port {port} — {svc}:")
+            for mod in mods:
+                ln(f"    use {mod}")
+    ln()
+
+    # Section 6 — General hardening
+    ln("[ SECTION 6: GENERAL HARDENING RECOMMENDATIONS ]"); ln("-" * 40)
+    for i, rec in enumerate([
+        "sudo apt update && sudo apt upgrade      (keep all packages updated)",
+        "sudo ufw enable; sudo ufw default deny incoming  (enable firewall)",
+        "sudo systemctl disable <service>         (disable unused services)",
+        "Deploy IDS/IPS: Snort or Suricata for real-time monitoring",
+        "Enable centralized logging (rsyslog) and review regularly",
+        "Apply principle of least privilege for all user accounts",
+        "Run regular VAPT scans and patch findings promptly",
+    ], 1):
+        ln(f"  {i}. {rec}")
+    ln(); ln(sep); ln("  END OF REPORT — Mini VAPT Suite v2.0"); ln(sep)
+
+    with open(fname, "w") as f:
+        f.write("\n".join(L))
+    print()
+    success(f"Report saved: {Color.CYAN}{fname}{Color.RESET}")
+    info(f"View it with: cat {fname}")
+
+
 def comprehensive_scan(target):
     """Module A: Run All Scan Modules"""
     section("COMPREHENSIVE SCAN - ALL MODULES")
@@ -717,7 +1042,12 @@ def comprehensive_scan(target):
     whois_lookup(target)
     ping_sweep(target)
     vuln_scan(target)
+    os_detection(target)
+    web_vuln_check(target)
+    packet_capture(target)
+    metasploit_suggest(target)
     mitigation_report(target)
+    generate_report(target)
 
     print()
     section("COMPREHENSIVE SCAN COMPLETE")
@@ -733,7 +1063,7 @@ def print_menu(target):
 
   {Color.CYAN}Target : {Color.GREEN}{target}{Color.RESET}
 
-  {Color.YELLOW} [1]  Basic Information Gathering {Color.RESET}(IP, Hostname, DNS)
+  {Color.YELLOW} [1]  Basic Information Gathering {Color.RESET}(IP, Hostname, FQDN)
   {Color.YELLOW} [2]  Nmap Port Scan             {Color.RESET}(Open Port Detection)
   {Color.YELLOW} [3]  Service Detection           {Color.RESET}(Running Services & Versions)
   {Color.YELLOW} [4]  Banner Grabbing             {Color.RESET}(Service Identification)
@@ -742,7 +1072,11 @@ def print_menu(target):
   {Color.YELLOW} [7]  Network Ping Sweep          {Color.RESET}(Active Host Discovery)
   {Color.YELLOW} [8]  Vulnerability Scan          {Color.RESET}(Nmap Vuln Scripts)
   {Color.YELLOW} [9]  OS Detection                {Color.RESET}(Target OS Fingerprinting)
+  {Color.YELLOW} [W]  Web Vuln Check              {Color.RESET}(Burp Suite context — Headers, Paths)
+  {Color.YELLOW} [P]  Packet Capture              {Color.RESET}(Wireshark/tcpdump — Live Traffic)
+  {Color.YELLOW} [E]  Metasploit Suggestions      {Color.RESET}(Exploit Module Mapping)
   {Color.YELLOW} [M]  Mitigation Report           {Color.RESET}(Remediation Strategy)
+  {Color.YELLOW} [R]  Save Report to File         {Color.RESET}(Full Assessment Report)
   {Color.BOLD}{Color.CYAN} [A]  Comprehensive Scan          {Color.RESET}(All Modules)
   {Color.BOLD} [B]  Change Target{Color.RESET}
   {Color.BOLD}{Color.RED} [Q]  Quit{Color.RESET}
@@ -782,7 +1116,11 @@ def main():
             "7": ping_sweep,
             "8": vuln_scan,
             "9": os_detection,
+            "W": web_vuln_check,
+            "P": packet_capture,
+            "E": metasploit_suggest,
             "M": mitigation_report,
+            "R": generate_report,
             "A": comprehensive_scan,
         }
 

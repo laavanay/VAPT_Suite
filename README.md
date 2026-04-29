@@ -1,7 +1,7 @@
 # Mini VAPT Suite
 ### Mini Vulnerability Assessment and Penetration Testing Suite
 
-Mini Vulnerability Assessment and Penetration Testing Suite is a simple security tool developed to scan systems and identify potential vulnerabilities such as open ports, insecure services, and weak configurations in a controlled lab environment.
+Mini VAPT Suite is a Python-based security tool that performs network reconnaissance, port scanning, service identification, vulnerability detection, and mitigation reporting — all from a single interactive terminal interface. Designed for use in a controlled lab environment (Kali Linux → Metasploitable 2).
 
 ---
 
@@ -24,14 +24,15 @@ Therefore, there is a need for a simple tool that can scan systems and identify 
 ## 2. Project Objectives
 
 The main objectives of the Mini VAPT Suite project are:
+
 - Perform basic network reconnaissance
 - Scan target systems for open ports
 - Identify running services on the system
 - Detect potential security vulnerabilities
 - Provide basic security assessment results
 - Help users understand possible risks in their system
-- **Generate actionable mitigation strategies for discovered vulnerabilities**
-- **Recommend specific remediation steps for each identified risk**
+- Generate actionable mitigation strategies for discovered vulnerabilities
+- Recommend specific remediation steps for each identified risk
 
 ---
 
@@ -61,7 +62,7 @@ This helps evaluate the security posture of the target environment.
 
 **Network Configuration:**
 - Attacker Machine – Kali Linux
-- Target Machine – Metasploitable
+- Target Machine – Metasploitable 2
 - Both systems connected in same virtual network
 
 ---
@@ -80,19 +81,19 @@ This helps evaluate the security posture of the target environment.
 
 ## 6. Scan Modules
 
-| #  | Module                      | Description                                         |
-|----|-----------------------------|-----------------------------------------------------|
-| 1  | Basic Information Gathering | IP address, hostname, reverse DNS                   |
-| 2  | Nmap Port Scan              | Detects open ports on the target                    |
-| 3  | Service Detection           | Identifies running services and their versions      |
-| 4  | Banner Grabbing             | Connects to ports and reads service banners         |
-| 5  | DNS Lookup                  | Resolves DNS records for the target                 |
-| 6  | Whois Lookup                | Domain/IP registration details                      |
-| 7  | Network Ping Sweep          | Discovers active hosts on the target subnet         |
-| 8  | Vulnerability Scan          | Runs Nmap vulnerability detection scripts           |
-| 9  | OS Detection                | Fingerprints the target operating system            |
-| M  | **Mitigation Report**       | **Generates remediation strategies per vulnerability** |
-| A  | Comprehensive Scan          | Runs all modules sequentially                       |
+| #  | Module                      | Description                                            |
+|----|-----------------------------|--------------------------------------------------------|
+| 1  | Basic Information Gathering | IP address, hostname, reverse DNS, FQDN                |
+| 2  | Nmap Port Scan              | Detects open ports on the target                       |
+| 3  | Service Detection           | Identifies running services and their versions         |
+| 4  | Banner Grabbing             | Connects to ports and reads service banners            |
+| 5  | DNS Lookup                  | Resolves DNS records for the target                    |
+| 6  | Whois Lookup                | Domain/IP registration details                         |
+| 7  | Network Ping Sweep          | Discovers active hosts on the target subnet            |
+| 8  | Vulnerability Scan          | Runs Nmap vulnerability detection scripts              |
+| 9  | OS Detection                | Fingerprints the target operating system               |
+| M  | **Mitigation Report**       | **Generates risk-rated remediation strategies per port** |
+| A  | Comprehensive Scan          | Runs all modules sequentially                          |
 
 ---
 
@@ -119,17 +120,6 @@ The **Mitigation Report** module (option `M`) is a key differentiator of this to
 | MEDIUM     | SSH (22), DNS (53), HTTPS-Alt (8443) |
 | LOW        | HTTPS (443) |
 
-### General Hardening Recommendations
-
-The tool also provides system-wide mitigation advice:
-- Keep all packages updated
-- Enable host-based firewall with deny-all default policy
-- Disable unnecessary services
-- Implement network segmentation
-- Deploy IDS/IPS (Snort, Suricata)
-- Enable centralized logging
-- Follow the principle of least privilege
-
 ---
 
 ## 7. Installation & Usage
@@ -150,7 +140,7 @@ python3 --version
 ```bash
 # Clone the repository
 git clone <repository_url>
-cd Mini_VAPT_Suite
+cd "VAPT Suite"
 
 # Run the scanner
 python3 vapt_suite.py
@@ -162,23 +152,17 @@ chmod +x vapt_suite.py
 
 ### Usage Steps
 1. Launch the tool with `python3 vapt_suite.py`
-2. Enter the target IP address or hostname (e.g., `192.168.1.100` or the Metasploitable IP)
+2. Enter the target IP address or hostname (e.g., the Metasploitable IP)
 3. Select a scan module from the menu (1–9, M for mitigation, A for all)
-4. Review the results displayed in the terminal
+4. Review the color-coded results displayed in the terminal
 5. Run the **Mitigation Report** (`M`) to get remediation strategies
 6. Press Enter to return to the menu after each scan
-
-### Example
-```
-$ python3 vapt_suite.py
-  [#] Enter the target IP or hostname: 192.168.1.100
-  [i] Target resolved: 192.168.1.100 → 192.168.1.100
-
-  Select a scan option: 2    ← Nmap Port Scan
-```
+7. Press `B` to change target, or `Q` to quit
 
 ---
 
 ## 8. Disclaimer
 
-> **This tool is developed strictly for educational purposes and should only be used in a controlled lab environment.**# VAPT_Suite
+> **This tool is developed strictly for educational purposes and should only be used in a controlled lab environment (Kali Linux → Metasploitable 2 on VMware).**
+>
+> Unauthorized scanning of systems without explicit permission is illegal. The developers assume no responsibility for misuse.
