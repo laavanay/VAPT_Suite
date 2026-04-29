@@ -30,6 +30,8 @@ The main objectives of the Mini VAPT Suite project are:
 - Detect potential security vulnerabilities
 - Provide basic security assessment results
 - Help users understand possible risks in their system
+- **Generate actionable mitigation strategies for discovered vulnerabilities**
+- **Recommend specific remediation steps for each identified risk**
 
 ---
 
@@ -89,7 +91,44 @@ This helps evaluate the security posture of the target environment.
 | 7  | Network Ping Sweep          | Discovers active hosts on the target subnet         |
 | 8  | Vulnerability Scan          | Runs Nmap vulnerability detection scripts           |
 | 9  | OS Detection                | Fingerprints the target operating system            |
+| M  | **Mitigation Report**       | **Generates remediation strategies per vulnerability** |
 | A  | Comprehensive Scan          | Runs all modules sequentially                       |
+
+---
+
+## 6.1 Mitigation Strategy
+
+The **Mitigation Report** module (option `M`) is a key differentiator of this tool. After scanning the target for open ports, it:
+
+1. **Identifies each open port** and maps it to a known service
+2. **Assigns a risk level** (CRITICAL / HIGH / MEDIUM / LOW) to each service
+3. **Lists specific security issues** associated with the service
+4. **Provides actionable remediation steps** including:
+   - Configuration changes (e.g., disable root SSH login, bind MySQL to localhost)
+   - Firewall rules (iptables/ufw commands)
+   - Service replacement recommendations (e.g., replace Telnet with SSH)
+   - Software update guidance
+5. **Generates a summary** with general hardening recommendations
+
+### Services Covered
+
+| Risk Level | Services |
+|------------|----------|
+| CRITICAL   | Telnet (23), NetBIOS/SMB (139), SMB (445), VNC (5900) |
+| HIGH       | FTP (21), SMTP (25), HTTP (80), POP3 (110), RPCbind (111), IMAP (143), MySQL (3306), PostgreSQL (5432), IRC (6667), HTTP-Alt (8080) |
+| MEDIUM     | SSH (22), DNS (53), HTTPS-Alt (8443) |
+| LOW        | HTTPS (443) |
+
+### General Hardening Recommendations
+
+The tool also provides system-wide mitigation advice:
+- Keep all packages updated
+- Enable host-based firewall with deny-all default policy
+- Disable unnecessary services
+- Implement network segmentation
+- Deploy IDS/IPS (Snort, Suricata)
+- Enable centralized logging
+- Follow the principle of least privilege
 
 ---
 
@@ -124,9 +163,10 @@ chmod +x vapt_suite.py
 ### Usage Steps
 1. Launch the tool with `python3 vapt_suite.py`
 2. Enter the target IP address or hostname (e.g., `192.168.1.100` or the Metasploitable IP)
-3. Select a scan module from the menu (1–9, A for all)
+3. Select a scan module from the menu (1–9, M for mitigation, A for all)
 4. Review the results displayed in the terminal
-5. Press Enter to return to the menu after each scan
+5. Run the **Mitigation Report** (`M`) to get remediation strategies
+6. Press Enter to return to the menu after each scan
 
 ### Example
 ```
